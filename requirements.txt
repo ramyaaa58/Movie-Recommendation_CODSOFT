@@ -1,0 +1,72 @@
+import difflib
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import linear_kernel
+
+
+class MovieRecommender:
+    def __init__(self, dataset_path: Path = None):
+        self.dataset_path = Path(dataset_path) if dataset_path else Path(__file__).parent / "movies.csv"
+        self.movies = self.load_dataset()
+        self.prepare_data()
+        self.build_model()
+
+    def load_dataset(self) -> pd.DataFrame:
+        movies = pd.read_csv(self.dataset_path)
+        movies.fillna("", inplace=True)
+        movies["title"] = movies["title"].astype(str)
+        movies["genre"] = movies["genre"].astype(str)
+        movies["description"] = movies["description"].astype(str)
+        movies["director"] = movies["director"].astype(str)
+        movies["cast"] = movies["cast"].astype(str)
+        movies["rating"] = movies["rating"].astype(str)
+        return movies
+
+    def prepare_data(self):
+        self.movies["title_lower"] = self.movies["title"].str.lower()
+        self.movies["combined"] = (
+            self.movies["title"]
+            + " "
+            + self.movies["genre"]
+            + " "
+            + self.movies["description"]
+            + " "
+            + self.movies["director"]
+            + " "
+            + self.movies["cast"]
+        )
+        self.titles_lower = self.movies["title_lower"].tolist()
+        self.indices = pd.Series(self.movies.index, index=self.movies["title_lower"]).drop_duplicates()
+
+    def build_model(self):
+        self.vectorizer = TfidfVectorizer(stop_words="english")
+        self.tfidf_matrix = self.vectorizer.fit_transform(self.movies["combined"])
+        self.cosine_sim = linear_kernel(self.tfidf_matrix, self.tfidf_matrix)
+
+    def find_best_match(self, title: str) -> str | None:
+        query = title.strip().lower()
+        if query in self.indices:
+            return query
+
+        matches = difflib.get_close_matches(query, self.titles_lower, n=1, cutoff=0.6)
+        return matches[0] if matches else None
+
+    def recommend(self, title: str, top_n: int = 10):
+        matched_title = self.find_best_match(title)
+        if not matched_title:
+            return None, None
+
+        idx = self.indices[matched_title]
+        similarity_scores = list(enumerate(self.cosine_sim[idx]))
+        similarity_scores = sorted(similarity_scores, key=lambda x: x[1], reverse=True)
+        similarity_scores = [score for score in similarity_scores if score[0] != idx]
+
+        top_indices = [i for i, _ in similarity_scores[:top_n]]
+        recommended_movies = self.movies.iloc[top_indices][["title", "genre", "rating"]].to_dict(orient="records")
+        return recommended_movies, matched_title
+
+    def get_random_title(self) -> str:
+        return np.random.choice(self.movies["title"].values).item()
